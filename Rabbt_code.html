@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Кролик-Прыгун</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #fdfbf7;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: sans-serif;
+            touch-action: none; /* Отключаем скролл страницы на телефоне */
+        }
+        canvas {
+            background-image: radial-gradient(#e0e0e0 1px, transparent 1px);
+            background-size: 20px 20px;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // 1. Инициализация Telegram
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        // 2. Настройка холста
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let width = window.innerWidth;
+        let height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+
+        // 3. Игровые переменные
+        let score = 0;
+        let isGameOver = false;
+        let isGameStarted = false;
+        const gravity = 0.4;
+        const jumpForce = -12;
+        
+        let keys = { left: false, right: false };
+
+        // Управление (клавиатура)
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft' || e.key === 'a') keys.left = true;
+            if (e.key === 'ArrowRight' || e.key === 'd') keys.right = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft' || e.key === 'a') keys.left = false;
+            if (e.key === 'ArrowRight' || e.key === 'd') keys.right = false;
+        });
+
+        // Управление (тач/мышь)
+        function handleTouch(e) {
+            e.preventDefault(); // Убираем зум и скролл
+            if (isGameOver) { resetGame(); return; }
+            if (!isGameStarted) isGameStarted = true;
+            
+            const touchX = e.touches ? e.touches[0].clientX : e.clientX;
+            if (touchX < width / 2) {
+                keys.left = true; keys.right = false;
+            } else {
+                keys.right = true; keys.left = false;
+            }
+        }
+        canvas.addEventListener('touchstart', handleTouch, {passive: false});
+        canvas.addEventListener('mousedown', handleTouch);
+        
+        const releaseKeys = () => { keys.left = false; keys.right = false; };
+        canvas.addEventListener('touchend', releaseKeys);
+        canvas.addEventListener('mouseup', releaseKeys);
+
+        // 4. Игрок
+        const player = {
+            x: width / 2 - 20,
+            y: height - 150,
+            width: 40,
+            height: 40,
+            vx: 0,
+            vy: jumpForce,
+            speed: 7
+        };
+
+        // 5. Платформы
+        let platforms = [];
+
+        // Типы платформ:
+        // normal - обычная (коричневая)
+        // moving - движущаяся (желтая)
+        // deadly - смертельная (красная)
+        // breakable - ломающаяся (потрескавшаяся)
+        
+        function createPlatform(x, y, forcedType = null) {
+            const types = ['normal', 'normal', 'normal', 'moving', 'breakable', 'deadly'];
+            let type = forcedType || types[Math.floor(Math.random() * types.length)];
+            
+            // Первые несколько платформ делаем обычными для легкого старта
+            if (y > height - 400) type = 'normal';
+
+            let color = '#e67e22';
+            if (type === 'moving') color = '#f1c40f';
+            if (type === 'deadly') color = '#e74c3c';
+            if (type === 'breakable') color = '#d35400'; // Темно-оранжевый
+
+            return {
+                x: x,
+                y: y,
+                width: 80,
+                height: 15,
+                type: type,
+                color: color,
+                vx: type === 'moving' ? (Math.random() > 0.5 ? 2 : -2) : 0,
+                isBroken: false
+            };
+        }
+
+        function initPlatforms() {
+            platforms = [];
+            platforms.push(createPlatform(player.x, player.y + 50, 'normal'));
+            
+            for (let i = 1; i < 8; i++) {
+                platforms.push(createPlatform(
+                    Math.random() * (width - 80),
+                    height - 250 - (i * 100)
+                ));
+            }
+        }
+        initPlatforms();
+
+        function resetGame() {
+            score = 0;
+            isGameOver = false;
+            isGameStarted = true;
+            player.x = width / 2 - 20;
+            player.y = height - 150;
+            player.vy = jumpForce;
+            initPlatforms();
+        }
+
+        // 6. Обновление логики
+        function update() {
+            if (!isGameStarted || isGameOver) return;
+
+            // Движение игрока
+            if (keys.left) player.vx = -player.speed;
+            else if (keys.right) player.vx = player.speed;
+            else player.vx = 0;
+
+            player.x += player.vx;
+            
+            // Телепортация за края
+            if (player.x + player.width < 0) player.x = width;
+            if (player.x > width) player.x = -player.width;
+
+            // Гравитация
+            player.vy += gravity;
+            player.y += player.vy;
+
+            // Логика платформ
+            platforms.forEach(p => {
+                if (p.isBroken) return;
+
+                // Движение желтых платформ
+                if (p.type === 'moving') {
+                    p.x += p.vx;
+                    if (p.x <= 0 || p.x + p.width >= width) p.vx *= -1;
+                }
+
+                // Проверка столкновения (только когда падаем вниз)
+                if (player.vy > 0) {
+                    // Проверяем пересечение по X и Y (приземление сверху)
+                    if (player.x + player.width > p.x && 
+                        player.x < p.x + p.width && 
+                        player.y + player.height > p.y && 
+                        player.y + player.height - player.vy <= p.y + 5) {
+                        
+                        // Взаимодействие с конкретным типом
+                        if (p.type === 'deadly') {
+                            isGameOver = true; // Смерть
+                        } else if (p.type === 'breakable') {
+                            p.isBroken = true; // Ломается
+                            player.vy = jumpForce; // Но оттолкнуться успевает
+                        } else {
+                            player.vy = jumpForce; // Обычный прыжок
+                        }
+                    }
+                }
+            });
+
+            // Движение камеры (когда игрок выше середины экрана)
+            if (player.y < height / 2) {
+                let dy = height / 2 - player.y;
+                player.y = height / 2;
+                score += dy;
+                
+                platforms.forEach(p => { p.y += dy; });
+
+                // Удаляем ушедшие вниз и добавляем новые
+                platforms = platforms.filter(p => p.y < height + 50 && !p.isBroken);
+                while (platforms.length < 8) {
+                    platforms.push(createPlatform(
+                        Math.random() * (width - 80),
+                        platforms[platforms.length - 1].y - (80 + Math.random() * 60)
+                    ));
+                }
+            }
+
+            // Проверка падения вниз
+            if (player.y > height) {
+                isGameOver = true;
+            }
+        }
+
+        // 7. Отрисовка
+        function draw() {
+            ctx.clearRect(0, 0, width, height);
+
+            // Платформы
+            platforms.forEach(p => {
+                if (p.isBroken) return;
+
+                // Сама морковка
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.roundRect(p.x, p.y, p.width, p.height, 10);
+                ctx.fill();
+
+                // Текстура / Трещины
+                ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+                ctx.lineWidth = 2;
+                if (p.type === 'breakable') {
+                    // Рисуем трещины
+                    ctx.beginPath();
+                    ctx.moveTo(p.x + 20, p.y);
+                    ctx.lineTo(p.x + 30, p.y + 8);
+                    ctx.lineTo(p.x + 25, p.y + 15);
+                    ctx.moveTo(p.x + 60, p.y);
+                    ctx.lineTo(p.x + 50, p.y + 10);
+                    ctx.stroke();
+                }
+                
+                // Ботва (зеленая часть)
+                ctx.fillStyle = '#2ecc71';
+                ctx.beginPath();
+                ctx.arc(p.x + p.width/2, p.y, 8, 0, Math.PI, true);
+                ctx.fill();
+            });
+
+            // Игрок (Кролик)
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.roundRect(player.x, player.y, player.width, player.height, 15);
+            ctx.fill();
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Глазки
+            ctx.fillStyle = '#000';
+            ctx.beginPath(); ctx.arc(player.x + 25, player.y + 15, 3, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(player.x + 15, player.y + 15, 3, 0, Math.PI * 2); ctx.fill();
+            // Ушки
+            ctx.fillStyle = '#ffb6c1';
+            ctx.beginPath(); ctx.ellipse(player.x + 30, player.y - 5, 5, 12, 0.2, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(player.x + 20, player.y - 5, 5, 12, -0.2, 0, Math.PI * 2); ctx.fill();
+
+            // Счет
+            ctx.fillStyle = '#333';
+            ctx.font = 'bold 24px sans-serif';
+            ctx.fillText(`Счет: ${Math.floor(score)}`, 20, 50);
+
+            // Экраны старта / конца
+            if (!isGameStarted) {
+                ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                ctx.fillRect(0, 0, width, height);
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 24px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Тапните, чтобы начать', width/2, height/2);
+                ctx.textAlign = 'left';
+            }
+
+            if (isGameOver) {
+                ctx.fillStyle = 'rgba(0,0,0,0.8)';
+                ctx.fillRect(0, 0, width, height);
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 28px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Игра окончена!', width/2, height/2 - 20);
+                ctx.fillText(`Счет: ${Math.floor(score)}`, width/2, height/2 + 20);
+                ctx.font = '18px sans-serif';
+                ctx.fillText('Тапните, чтобы перезапустить', width/2, height/2 + 70);
+                ctx.textAlign = 'left';
+            }
+        }
+
+        // Полифилл для roundRect
+        if (!CanvasRenderingContext2D.prototype.roundRect) {
+            CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+                if (w < 2 * r) r = w / 2;
+                if (h < 2 * r) r = h / 2;
+                this.beginPath();
+                this.moveTo(x + r, y);
+                this.arcTo(x + w, y, x + w, y + h, r);
+                this.arcTo(x + w, y + h, x, y + h, r);
+                this.arcTo(x, y + h, x, y, r);
+                this.arcTo(x, y, x + w, y, r);
+                this.closePath();
+                return this;
+            };
+        }
+
+        // Цикл
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        gameLoop();
+
+        // Ресайз
+        window.addEventListener('resize', () => {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        });
+    </script>
+</body>
+  </html>
